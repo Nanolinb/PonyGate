@@ -1,0 +1,9 @@
+# 真实配置含订阅 token 和密码，绝不入库
+config/config.yaml
+# 面板文件和 GEO 数据库体积大且可自动下载，不入库
+config/ui/
+*.dat
+*.metadb
+*.tgz
+*.mmdb
+.DS_Store

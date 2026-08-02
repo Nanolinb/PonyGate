@@ -1,0 +1,165 @@
+# PonyGate —— QNAP TS-464C 旁路由（mihomo 内核）
+# 源稿: ~/Kimi Space/PonyGate/  部署: /share/Container/mihomo/ (192.168.1.2)
+# ========== 基础 ==========
+mixed-port: 7890                # HTTP/SOCKS 混合代理端口（手动代理的备用入口）
+allow-lan: true
+bind-address: "*"
+mode: rule
+log-level: info
+
+# 记住面板里的节点选择，重启后不丢失
+profile:
+  store-selected: true
+
+# GEOIP/GEOSITE 数据库每天自动更新（GitHub 直连被墙，走 gh-proxy 镜像）
+geo-update-interval: 24
+geox-url:
+  geoip: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb"
+  geosite: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat"
+  mmdb: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb"
+  asn: "https://gh-proxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb"
+
+# ========== 管理面板（类 ClashX 界面）==========
+external-controller: 0.0.0.0:9090
+external-ui: ui                 # 首次启动自动下载 metacubexd 面板到 config/ui
+secret: "change-me"  # 面板登录密码，可自行修改
+
+# ========== TUN 透明代理（旁路由核心）==========
+tun:
+  enable: true
+  stack: mixed
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+    - any:53
+  # QTS 内核禁用了 IPv6，必须显式留空，否则 TUN 配置报 permission denied
+  inet4-address:
+    - 198.18.0.1/30
+  inet6-address: []
+  inet4-route-address:
+    - 0.0.0.0/1
+    - 128.0.0.0/1
+  inet6-route-address: []
+
+# ========== SNI 嗅探：连接只有 IP 没有域名时，从 TLS 握手恢复域名再匹配规则 ==========
+sniffer:
+  enable: true
+  sniff:
+    TLS:
+      ports: [443, 8443]
+    HTTP:
+      ports: [80, 8080]
+
+# ========== DNS ==========
+dns:
+  enable: true
+  listen: 192.168.1.2:53      # 监听 NAS 局域网 IP 的标准 53 端口（避开 QTS dnsmasq 占用的回环/网桥地址）
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  # 订阅 API 和节点服务器域名必须返回真实 IP，否则 mihomo 自己拨号会失败
+  fake-ip-filter:
+    - "sub.example.com"        # 你的订阅 API 域名（必须加，否则订阅拉取失败）
+  # 上游全部用 DoH（TCP 443），避开 TUN 的 53 端口劫持，防止 mihomo 自身查询自循环
+  nameserver:
+    - https://223.5.5.5/dns-query
+    - https://1.1.1.1/dns-query
+  # 节点服务器域名解析也走 DoH 直连
+  proxy-server-nameserver:
+    - https://223.5.5.5/dns-query
+
+# ========== 订阅（和 ClashX / FlyingBird 的订阅链接通用）==========
+proxy-providers:
+  airport:   # 订阅 1：单服务器/自建
+    type: http
+    url: "https://你的订阅链接-1"
+    interval: 86400             # 每天自动更新
+    health-check:
+      enable: true
+      url: http://www.gstatic.com/generate_204
+      interval: 300
+  # 订阅 2：多地区机场
+  # exclude-filter：剔除明文传输节点(BETA-2, 无TLS)和 MITM 节点，任何组都不会用到
+  ykk:
+    type: http
+    url: "https://你的订阅链接-2"
+    interval: 86400
+    exclude-filter: "BETA-2|MITM"
+    health-check:
+      enable: true
+      url: http://www.gstatic.com/generate_204
+      interval: 300
+
+# ========== 代理组 ==========
+proxy-groups:
+  # AI 专用组：美国/新加坡节点 + 自建 VPS，手动选择固定不变
+  - name: AI
+    type: select
+    use:
+      - airport
+      - ykk
+    filter: "UnitedStates|Singapore|my-vps"   # 按节点名正则筛选
+  # 自动选择：每 5 分钟测速，用延迟最低的节点
+  - name: AUTO
+    type: url-test
+    use:
+      - airport
+      - ykk
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+  # 手动选择：默认走 AUTO，也可以在面板里指定具体节点
+  - name: PROXY
+    type: select
+    use:
+      - airport
+      - ykk
+    proxies:
+      - AUTO
+      - DIRECT
+
+# ========== 分流规则：命中才走代理，其余直连 ==========
+rules:
+  # 封掉 DoT（853 端口），防止设备绕过本地 DNS 自己加密查询导致分流失效
+  - DST-PORT,853,REJECT
+
+  # ---- 你点名的站点（含 CDN 域名）----
+  # GitHub（geosite gfw 不含，单独列）
+  - DOMAIN-SUFFIX,github.com,PROXY
+  - DOMAIN-SUFFIX,githubusercontent.com,PROXY
+  - DOMAIN-SUFFIX,githubassets.com,PROXY
+  - DOMAIN-SUFFIX,github.io,PROXY
+  - DOMAIN-SUFFIX,ghcr.io,PROXY
+  # 自定义站点示例：冷门站点用关键字匹配，换后缀也能命中
+  # - DOMAIN-KEYWORD,mysite,PROXY
+  # - DOMAIN-SUFFIX,example.com,PROXY
+  # ---- AI 服务：固定走 AI 组（美国/新加坡，避免频繁换 IP）----
+  - GEOSITE,openai,AI           # ChatGPT/OpenAI API（chatgpt.com/oai 全系）
+  - DOMAIN-SUFFIX,x.ai,AI       # Grok
+  - DOMAIN-SUFFIX,grok.com,AI
+  - DOMAIN-SUFFIX,gemini.google.com,AI      # Gemini（必须在 GEOSITE,google 之前）
+  - DOMAIN-SUFFIX,aistudio.google.com,AI    # Google AI Studio
+  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,AI  # Gemini API
+  - GEOSITE,anthropic,AI        # Claude
+
+  # ---- GEOSITE 分类规则（数据库内置几百个域名，含 CDN）----
+  - GEOSITE,google,PROXY        # 谷歌全家桶：搜索/Gmail/地图/网盘/谷歌学术
+  - GEOSITE,youtube,PROXY       # YouTube 及视频 CDN
+  - GEOSITE,telegram,PROXY      # Telegram
+  - GEOSITE,instagram,PROXY
+  - GEOSITE,pinterest,PROXY
+  - GEOSITE,twitter,PROXY       # X/Twitter
+  - GEOSITE,facebook,PROXY
+  - GEOSITE,whatsapp,PROXY
+  - GEOSITE,discord,PROXY
+  - GEOSITE,reddit,PROXY
+  - GEOSITE,twitch,PROXY
+  - GEOSITE,wikimedia,PROXY     # 维基百科全系
+  - GEOSITE,medium,PROXY
+  - GEOSITE,quora,PROXY
+  - GEOSITE,tumblr,PROXY
+  - GEOSITE,vimeo,PROXY
+  - GEOSITE,dropbox,PROXY
+
+  - GEOIP,LAN,DIRECT,no-resolve   # 内网地址直连
+  - GEOIP,CN,DIRECT               # 国内 IP 直连
+  - MATCH,DIRECT                  # 其余全部直连

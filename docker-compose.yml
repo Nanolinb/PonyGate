@@ -1,0 +1,14 @@
+services:
+  mihomo:
+    image: metacubex/mihomo:latest
+    container_name: mihomo
+    restart: always
+    network_mode: host          # 旁路由透明代理必须用 host 网络
+    privileged: true            # QNAP 下 TUN 需要特权模式
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    volumes:
+      - ./config:/root/.config/mihomo
+    command: -d /root/.config/mihomo
