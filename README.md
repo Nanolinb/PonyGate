@@ -1,5 +1,7 @@
 # PonyGate
 
+> A smart and low cost SideRouter on your NAS. Using NAS to save the world.
+
 A bypass gateway (旁路由) running on a **QNAP x86 NAS**: one Docker container with the mihomo core turns your NAS into a whole-LAN split-routing gateway. Blocked sites go through proxies, everything else goes direct — zero configuration on client devices.
 
 跑在 **QNAP x86 NAS** 上的旁路由：一个 Docker 容器 + mihomo 内核，把 NAS 变成全屋的分流网关。被墙的走代理，其余直连，设备零配置。
