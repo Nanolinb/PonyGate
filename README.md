@@ -34,14 +34,14 @@ Three groups — the core of this setup | 配置里有三个组，是这套方�
 |---|---|---|
 | `PROXY` | select | Main egress. Points to `AUTO` by default; pin a specific node in the dashboard anytime. 总出口，默认指向 `AUTO`，也可手动钉节点 |
 | `AUTO` | url-test | Latency test every 5 min, always uses the fastest node. 每 5 分钟测速，自动用延迟最低的节点 |
-| `AI` | select | **Dedicated lane for overseas AI services**: US/Singapore nodes + self-hosted VPS only. **海外 AI 服务专用通道**：只含美国/新加坡节点 + 自建 VPS |
+| `AI` | fallback | **Dedicated lane for overseas AI services**: US/Singapore nodes + self-hosted VPS only. Sticks to the first healthy node; auto-switches only on failure and switches back when it recovers. **海外 AI 服务专用通道**：只含美国/新加坡节点 + 自建 VPS，固定用首选节点，故障才切换 |
 
 ### Why a dedicated AI group | 为什么 AI 要单独分组
 
 ChatGPT / Grok / Gemini / Claude have two special requirements | 这类服务有两个特殊要求：
 
-1. **Frequent egress-IP changes trigger risk control** — `AUTO` may hop nodes every few minutes; fine for normal sites, but AI services treat IP churn as suspicious logins, which can lead to bans. `AI` is a manual-select group: pinned until you change it.
-   **忌讳频繁换出口 IP**——`AUTO` 每几分钟可能跳节点，AI 服务会把 IP 抖动视为异常登录，触发风控甚至封号。所以 `AI` 组是纯手动选择，选定就固定。
+1. **Frequent egress-IP changes trigger risk control** — `AUTO` may hop nodes every few minutes; fine for normal sites, but AI services treat IP churn as suspicious logins, which can lead to bans. `AI` is a `fallback` group: it stays on the first healthy node, switches only when it fails the periodic health check, and returns when it recovers.
+   **忌讳频繁换出口 IP**——`AUTO` 每几分钟可能跳节点，AI 服务会把 IP 抖动视为异常登录，触发风控甚至封号。所以 `AI` 组用 `fallback` 模式：固定用第一个健康节点，定时健康检查，挂了才切换，恢复后自动切回。
 2. **Region requirements** — Hong Kong nodes are often restricted or degraded by AI providers, so the `AI` group uses a `filter` regex to keep only US/Singapore nodes, plus a self-hosted VPS as fallback.
    **对节点地区有要求**——香港节点常被 AI 服务限制或降质，所以 `AI` 组用 `filter` 正则只保留美国/新加坡节点，再加自建 VPS 兜底。
 
@@ -73,7 +73,14 @@ Running mihomo TUN on QTS hits problems you won't see on generic Linux — this 
 5. **Container needs `privileged: true`** — `NET_ADMIN` alone is not enough on QNAP's Docker.
    **容器需要 `privileged: true`**——QNAP 的 Docker 只给 `NET_ADMIN` 不够。
 
-Server-side hardening | 服务端加固：`sniffer` (SNI sniffing, recovers domains from devices using their own DoH | SNI 嗅探，应对设备私自 DoH) + `DST-PORT,853,REJECT` (block DoT, force local DNS | 封 DoT，强制本地 DNS)。
+Server-side hardening | 服务端加固：`sniffer` (SNI sniffing, recovers domains from devices using their own DoH | SNI 嗅探，应对设备私自 DoH) + `DST-PORT,853,REJECT` + blocking 8.8.8.8/8.8.4.4 (block DoT and Google DNS, force local DNS | 封 DoT 和 Google DNS，强制本地 DNS)。
+
+Two more pitfalls we learned the hard way in production (also fixed in this config) | 另外还有两个在生产环境踩出来的坑（本配置也已修复）：
+
+6. **TUN MTU defaults to 9000** — on a standard 1500-MTU network, large TLS handshake packets get silently dropped: connections establish then die instantly, and apps (JD, WeChat mini-programs) retry-storm and report "network error". Fix: `mtu: 1500`.
+   **TUN MTU 默认 9000**——在标准 1500 网络下大包被静默丢弃：连接能建立但立刻卡死，app（京东、微信小程序）疯狂重连报网络错误。解法：`mtu: 1500`。
+7. **Public DoH has no ECS → cross-carrier CDN scheduling** — resolving domestic domains via AliDNS/Cloudflare DoH loses the client subnet, so CDN DNS may hand you another carrier's nodes; on Telecom lines this causes intermittent connect timeouts for WeChat mini-programs / payment QR / e-commerce apps. Fix: `nameserver-policy` sends `geosite:cn` to your router (ISP DNS), which returns carrier-local nodes. Switching ISPs later needs no config change — the router relays whatever the current line provides.
+   **公共 DoH 不带 ECS → CDN 跨网调度**——国内域名走阿里/CF DoH 解析丢了客户端子网，CDN 可能给你别家运营商的节点，电信线下表现为小程序/支付/电商间歇超时。解法：`nameserver-policy` 把 `geosite:cn` 指向路由器（运营商 DNS），返回本地节点；以后换运营商也无需改配置。
 
 ## Deployment | 部署
 

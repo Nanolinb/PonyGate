@@ -11,4 +11,8 @@ services:
       - /dev/net/tun
     volumes:
       - ./config:/root/.config/mihomo
-    command: -d /root/.config/mihomo
+    # 启动前给宿主机进程(root)加路由豁免：NAS 自身流量绕过 TUN 直连，
+    # 避免同机其它服务(host 网络容器等)被 TUN 劫持导致卡顿/假死
+    entrypoint: >
+      sh -c "ip rule add pref 8999 uidrange 0-0 lookup main 2>/dev/null || true;
+             exec /mihomo -d /root/.config/mihomo"

@@ -28,6 +28,7 @@ secret: "change-me"  # 面板登录密码，可自行修改
 tun:
   enable: true
   stack: mixed
+  mtu: 1500               # 必须为 1500！默认 9000 在标准网络会丢大包（TLS 握手卡死、app 无限重连）
   auto-route: true
   auto-detect-interface: true
   dns-hijack:
@@ -63,6 +64,13 @@ dns:
   nameserver:
     - https://223.5.5.5/dns-query
     - https://1.1.1.1/dns-query
+  # 国内域名改走路由器（运营商）DNS 解析：公共 DoH 不带 ECS，会把用户调度到
+  # 跨运营商 CDN 节点导致间歇超时（小程序/支付/电商 app 卡死的常见根因）
+  # 换成你的路由器地址即可，换宽带运营商无需改配置
+  nameserver-policy:
+    "geosite:cn":
+      - 192.168.1.1          # ← 改成你的路由器/网关地址
+      - https://223.5.5.5/dns-query
   # 节点服务器域名解析也走 DoH 直连
   proxy-server-nameserver:
     - https://223.5.5.5/dns-query
@@ -91,13 +99,18 @@ proxy-providers:
 
 # ========== 代理组 ==========
 proxy-groups:
-  # AI 专用组：美国/新加坡节点 + 自建 VPS，手动选择固定不变
+  # AI 专用组：fallback 模式 —— 固定优先用第一个可用节点，挂了才切换，恢复自动切回
+  # （ChatGPT/Claude 对 IP 跳变敏感，url-test 频繁换 IP 会触发风控）
+  # 想固定首选地区，把对应地区的订阅 provider 放 use 列表第一位即可
   - name: AI
-    type: select
+    type: fallback
     use:
       - airport
       - ykk
     filter: "UnitedStates|Singapore|my-vps"   # 按节点名正则筛选
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    timeout: 3000
   # 自动选择：每 5 分钟测速，用延迟最低的节点
   - name: AUTO
     type: url-test
@@ -121,6 +134,9 @@ proxy-groups:
 rules:
   # 封掉 DoT（853 端口），防止设备绕过本地 DNS 自己加密查询导致分流失效
   - DST-PORT,853,REJECT
+  # 封 Google DNS IP：防止 Chrome/安卓用 DoH(8.8.8.8:443) 绕过本地 DNS，迫使其回落系统 DNS
+  - IP-CIDR,8.8.8.8/32,REJECT,no-resolve
+  - IP-CIDR,8.8.4.4/32,REJECT,no-resolve
 
   # ---- 你点名的站点（含 CDN 域名）----
   # GitHub（geosite gfw 不含，单独列）
@@ -142,6 +158,7 @@ rules:
   - GEOSITE,anthropic,AI        # Claude
 
   # ---- GEOSITE 分类规则（数据库内置几百个域名，含 CDN）----
+  - GEOSITE,tmdb,PROXY          # TMDB 影视元数据/海报（NAS 影音库刮削需要）
   - GEOSITE,google,PROXY        # 谷歌全家桶：搜索/Gmail/地图/网盘/谷歌学术
   - GEOSITE,youtube,PROXY       # YouTube 及视频 CDN
   - GEOSITE,telegram,PROXY      # Telegram
